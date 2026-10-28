@@ -2,6 +2,7 @@ import glob
 import inspect
 import os
 import re
+import shutil
 import subprocess  # nosec B404
 import sys
 import time
@@ -50,7 +51,8 @@ class GitClone:
 
     folder: str | Path
     url: str
-    branch: str = "main"
+    branch: str | None = None
+    """Branch a clonar; ``None`` usa a branch padrão do remoto."""
 
 
 class Workspace:
@@ -68,6 +70,9 @@ class Workspace:
         moodle_plugins: list[str] | None = None,
         cli_dict: dict[str, str] | None = None,
         shell_dict: dict[str, str] | None = None,
+        hosts: tuple[str, str] | None = None,
+        plugins_build_dir: str | Path | None = None,
+        plugin_package_name: str = "{plugin}-{version}.zip",
         argv: list[str] | None = None,
     ):
         self.script = Path(script_file).resolve()
@@ -82,6 +87,10 @@ class Workspace:
         self.moodle_plugins = moodle_plugins or []
         self.cli_dict = cli_dict or {}
         self.shell_dict = shell_dict or {}
+        # (nome, linha): ex. ("IFRN-AVA", "127.0.0.1    moodle")
+        self.hosts = hosts
+        self.plugins_build_dir = self.project_dir / (plugins_build_dir or Path("workspace") / "build" / "plugins")
+        self.plugin_package_name = plugin_package_name
 
         self.argv = list(sys.argv if argv is None else argv)
         self._command_name = self.argv[1] if len(self.argv) > 1 else "help"
@@ -143,9 +152,14 @@ class Workspace:
         )
         self._services = []
         repositories = [""]
+        section = ""
         for line in result.stdout.splitlines():
-            service = re.search(r"^  (\w*):$", line)
-            if service and service.group(1) != "default":
+            top_level = re.search(r"^(\w+):", line)
+            if top_level:
+                section = top_level.group(1)
+            # só entradas da seção services: (volumes/networks têm a mesma indentação)
+            service = re.search(r"^  ([\w-]*):$", line)
+            if service and section == "services":
                 self._services.append(service.group(1))
             image = re.search(r"^(    image: )(.*)$", line)
             if image:
@@ -196,7 +210,7 @@ class Workspace:
 
     @staticmethod
     def _prefixed_envs(prefix: str) -> dict[str, str]:
-        return {k[len(prefix) :].lower(): v for k, v in os.environ.items() if k.startswith(prefix)}
+        return {k[len(prefix) :].lower(): v for k, v in os.environ.items() if k.startswith(prefix) and v.strip()}
 
     @property
     def _verb(self) -> str:
@@ -216,10 +230,9 @@ class Workspace:
         return service, verb, args
 
     def _write_hosts(self) -> None:
-        hosts = self._prefixed_envs("HOSTS")
-        if "" not in hosts or ":" not in hosts[""]:
+        if self.hosts is None:
             return
-        hosts_name, hosts_value = hosts[""].split(":", 1)
+        hosts_name, hosts_value = self.hosts
         hosts_file = WINDOWS_HOSTS if sys.platform == "win32" else POSIX_HOSTS
         try:
             content = hosts_file.read_text(encoding="utf-8")
@@ -293,9 +306,23 @@ class Workspace:
             folder = Path(g.folder)
             folder.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
             if not folder.exists():
-                print(f"Clonando {Color.c(folder)} do repositório {Color.y(g.url)} na branch {Color.m(g.branch)}")
-                self._execute(f'git clone -b {g.branch} {g.url} "{folder}"')
+                branch = Color.m(g.branch or "padrão")
+                print(f"Clonando {Color.c(folder)} do repositório {Color.y(g.url)} na branch {branch}")
+                branch_arg = f"-b {g.branch} " if g.branch else ""
+                self._execute(f'git clone {branch_arg}{g.url} "{folder}"')
+            self._install_pre_commit(folder)
         return 0
+
+    def _install_pre_commit(self, folder: Path) -> None:
+        if not (folder / ".pre-commit-config.yaml").exists():
+            return
+        if shutil.which("pre-commit"):
+            print(f"Configurando pre-commit em {Color.c(folder)}")
+            self._execute(
+                f'pre-commit install --install-hooks -t pre-commit -t pre-push -c "{folder}/.pre-commit-config.yaml"'
+            )
+        else:
+            print(f"{Color.y('Aviso:')} 'pre-commit' não está instalado. Pulando configuração em {Color.c(folder)}.")
 
     def setup(self) -> int:
         """Executa o setup do ambiente, ou seja, clona todos os repositórios e configura o PATH e o hosts. Aplica-se a: env"""  # noqa: E501
@@ -319,14 +346,14 @@ class Workspace:
     def git(self) -> int:
         """Executa o comando git em todos os repositórios git. Aplica-se a: env"""
         git_arguments = " ".join(self.argv[2:]) if len(self.argv) > 2 else "status"
-        print(f"Executando {Color.b('git ' + git_arguments)} em {Color.m(self.workspace_dir)}")
-        self._execute(f'git -C "{self.workspace_dir}" {git_arguments}')
-        for g in self.git_clones:
-            if Path(g.folder).exists():
-                print(f"Executando {Color.b('git ' + git_arguments)} em {Color.m(g.folder)}")
-                self._execute(f'git -C "{g.folder}" {git_arguments}')
-            else:
-                print(f"O projeto {g.folder} NÃO foi clonado ainda.")
+        for folder in [self.workspace_dir, *(Path(g.folder) for g in self.git_clones)]:
+            if not folder.exists():
+                print(f"O projeto {folder} NÃO foi clonado ainda.")
+                continue
+            print(f"Executando {Color.b('git ' + git_arguments)} em {Color.m(folder)}")
+            returncode = self._execute(f'git -C "{folder}" {git_arguments}')
+            if returncode != 0:
+                return returncode
         return 0
 
     def cli(self) -> int:
@@ -394,7 +421,7 @@ class Workspace:
                         continue
                     zipf.write(file_path, Path(prefix) / file_path.relative_to(folder_path))
 
-        build_dir = self.workspace_dir / "build" / "plugins"
+        build_dir = self.plugins_build_dir
         for plugin_fullname in self.moodle_plugins:
             plugin_name = plugin_fullname.split("_", 1)[1]
             plugin_dir = self.project_dir / plugin_fullname
@@ -402,12 +429,15 @@ class Workspace:
                 if not line.startswith("$plugin->version"):
                     continue
                 plugin_version = line.split("=")[1].replace(";", "").split()[0]
-                plugin_package = build_dir / f"{plugin_fullname}-{plugin_version}.zip"
+                plugin_package = build_dir / self.plugin_package_name.format(
+                    plugin=plugin_fullname, version=plugin_version
+                )
                 if plugin_package.exists():
                     print(f"Plugin {Color.c(plugin_package)} {Color.r('JÁ existe')}.")
                     continue
                 print(f"Plugin {Color.c(plugin_package)} {Color.g('NÃO existe')}.")
-                for old_zip in glob.glob(str(build_dir / f"{plugin_fullname}-*.zip")):
+                old_pattern = self.plugin_package_name.format(plugin=plugin_fullname, version="*")
+                for old_zip in glob.glob(str(build_dir / old_pattern)):
                     try:
                         os.remove(old_zip)
                     except OSError:
