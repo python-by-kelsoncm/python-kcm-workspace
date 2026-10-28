@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kcm-workspace"
+version = "0.1.0"
+description = "Base class for docker compose workspace scripts (clone, setup, launch, shell, manage and more)"
+readme = "README.md"
+license = { file = "LICENSE.md" }
+authors = [{ name = "Kelson da Costa Medeiros", email = "kelsoncm@gmail.com" }]
+keywords = ["docker", "compose", "workspace", "cli"]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=4.6.0",
+    "black>=26.3.1",
+    "ruff>=0.15.11",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/python-by-kelsoncm/python-kcm-workspace"
+"Bug Tracker" = "https://github.com/python-by-kelsoncm/python-kcm-workspace/issues"
+Download = "https://github.com/python-by-kelsoncm/python-kcm-workspace/releases/"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kcm_workspace*"]
+
+[tool.coverage.run]
+source = ["kcm_workspace"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+
+[tool.ruff]
+line-length = 120
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S108"]
+"kcm_workspace/workspace.py" = ["S602", "S603", "S607"]
+
+[tool.black]
+line-length = 120
