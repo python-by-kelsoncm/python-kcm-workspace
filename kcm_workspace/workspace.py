@@ -152,9 +152,14 @@ class Workspace:
         )
         self._services = []
         repositories = [""]
+        section = ""
         for line in result.stdout.splitlines():
-            service = re.search(r"^  (\w*):$", line)
-            if service and service.group(1) != "default":
+            top_level = re.search(r"^(\w+):", line)
+            if top_level:
+                section = top_level.group(1)
+            # só entradas da seção services: (volumes/networks têm a mesma indentação)
+            service = re.search(r"^  ([\w-]*):$", line)
+            if service and section == "services":
                 self._services.append(service.group(1))
             image = re.search(r"^(    image: )(.*)$", line)
             if image:

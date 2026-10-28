@@ -18,6 +18,9 @@ services:
 networks:
   default:
     name: demo_default
+volumes:
+  db_data:
+    name: demo_db_data
 """
 
 
@@ -92,6 +95,7 @@ def test_help_without_args(project, calls, capsys):
     assert make(project).run() == 0
     out = capsys.readouterr().out
     assert "extra" in out and "relaunch" in out and "not_a_command" not in out
+    assert "db_data" not in out
     assert "db,web,env" in out.replace(Color.ENDC, "").replace("\033[96m", "").replace(", ", ",")
 
 
