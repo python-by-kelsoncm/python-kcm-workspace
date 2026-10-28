@@ -155,12 +155,18 @@ def test_setup(project, calls, monkeypatch, tmp_path):
     monkeypatch.setattr(ws_module, "WINDOWS_HOSTS", hosts)
     monkeypatch.setattr(ws_module, "POSIX_HOSTS", hosts)
     monkeypatch.setattr(ws_module.sys, "platform", "win32")
-    monkeypatch.setenv("HOSTS", "demo:127.0.0.1 demo.local")
     monkeypatch.setenv("VOLUMES_DIR", str(tmp_path / "vols"))
-    w = make(project, "setup", git_clones=[GitClone("app", "git@x:app.git")], mk_volumes=["db"])
+    w = make(
+        project,
+        "setup",
+        git_clones=[GitClone("app", "git@x:app.git"), GitClone("lib", "git@x:lib.git", "dev")],
+        mk_volumes=["db"],
+        hosts=("demo", "127.0.0.1 demo.local"),
+    )
     w.home = home
     assert w.run() == 0
-    assert any(c.startswith("git clone -b main git@x:app.git") for c in calls)
+    assert any(c.startswith("git clone git@x:app.git") for c in calls)
+    assert any(c.startswith("git clone -b dev git@x:lib.git") for c in calls)
     assert "127.0.0.1 demo.local" in hosts.read_text()
     assert (tmp_path / "vols" / "db").is_dir()
     assert str(project.parent) in (home / ".bashrc").read_text()
@@ -171,8 +177,7 @@ def test_write_hosts_posix_and_missing(project, calls, monkeypatch, tmp_path):
     hosts.write_text("")
     monkeypatch.setattr(ws_module, "POSIX_HOSTS", hosts)
     monkeypatch.setattr(ws_module.sys, "platform", "linux")
-    monkeypatch.setenv("HOSTS", "demo:127.0.0.1 demo.local")
-    w = make(project)
+    w = make(project, hosts=("demo", "127.0.0.1 demo.local"))
     w._write_hosts()
     assert "sudo tee -a" in calls[-1]
     monkeypatch.setattr(ws_module, "POSIX_HOSTS", tmp_path / "nao-existe")
@@ -188,7 +193,6 @@ def test_write_hosts_permission_denied(project, calls, monkeypatch, tmp_path, ca
     hosts.write_text("")
     monkeypatch.setattr(ws_module, "WINDOWS_HOSTS", hosts)
     monkeypatch.setattr(ws_module.sys, "platform", "win32")
-    monkeypatch.setenv("HOSTS", "demo:127.0.0.1 demo.local")
 
     original_open = Path.open
 
@@ -198,7 +202,7 @@ def test_write_hosts_permission_denied(project, calls, monkeypatch, tmp_path, ca
         return original_open(self, mode, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", deny)
-    make(project)._write_hosts()
+    make(project, hosts=("demo", "127.0.0.1 demo.local"))._write_hosts()
     assert "Permissão negada" in capsys.readouterr().out
 
 
@@ -215,6 +219,25 @@ def test_git(project, calls, tmp_path):
     (project.parent.parent / "app").mkdir()
     make(project, "git", "pull", git_clones=[GitClone("app", "u"), GitClone("falta", "u")]).run()
     assert calls[0].endswith("pull") and len(calls) == 2
+
+
+def test_git_stops_on_error(project, monkeypatch, calls):
+    (project.parent.parent / "app").mkdir()
+    monkeypatch.setattr(Demo, "_execute", lambda self, *a: calls.append(" ".join(a)) or 1)
+    assert make(project, "git", "pull", git_clones=[GitClone("app", "u")]).run() == 1
+    assert len(calls) == 1
+
+
+def test_clone_installs_pre_commit(project, calls, monkeypatch, capsys):
+    app = project.parent.parent / "app"
+    app.mkdir()
+    (app / ".pre-commit-config.yaml").write_text("repos: []\n")
+    monkeypatch.setattr(ws_module.shutil, "which", lambda name: "/bin/pre-commit")
+    make(project, "clone", git_clones=[GitClone("app", "u")]).run()
+    assert calls[-1].startswith("pre-commit install")
+    monkeypatch.setattr(ws_module.shutil, "which", lambda name: None)
+    make(project, "clone", git_clones=[GitClone("app", "u")]).run()
+    assert "não está instalado" in capsys.readouterr().out
 
 
 def test_wait(project, calls, monkeypatch):
@@ -239,6 +262,23 @@ def test_compress_and_publish(project, calls):
         assert z.namelist() == ["demo/version.php"]
     make(project, "compress_plugins", moodle_plugins=["local_demo"]).run()
     assert calls[-1] == "docker compose build --progress plain --push ava"
+
+
+def test_compress_custom_destination(project, calls):
+    plugin = project.parent.parent / "tool_x_y"
+    plugin.mkdir()
+    (plugin / "version.php").write_text("$plugin->version = 7;\n")
+    w = make(
+        project,
+        "compress_plugins",
+        moodle_plugins=["tool_x_y"],
+        plugins_build_dir="../infra/build",
+        plugin_package_name="{plugin}_{version}.zip",
+    )
+    w.run()
+    package = project.parent.parent.parent / "infra" / "build" / "tool_x_y_7.zip"
+    with zipfile.ZipFile(package) as z:
+        assert z.namelist() == ["x_y/version.php"]
 
 
 def test_code(project, calls):
