@@ -337,8 +337,9 @@ class Workspace:
             print(f"{Color.y('Aviso:')} 'pre-commit' não está instalado. Pulando configuração em {Color.c(folder)}.")
             return
         print(f"Configurando pre-commit em {Color.c(folder)}")
-        # o hook é instalado no repositório da pasta de trabalho, por isso cwd=folder
-        self._execute(f"{pre_commit} install --install-hooks -t pre-commit -t pre-push", cwd=folder)
+        # o hook é instalado no repositório da pasta de trabalho, por isso cwd=folder;
+        # sem --install-hooks: os ambientes dos hooks são criados no primeiro commit
+        self._execute(f"{pre_commit} install -t pre-commit -t pre-push", cwd=folder)
 
     def setup(self) -> int:
         """Executa o setup do ambiente, ou seja, clona todos os repositórios e configura o PATH e o hosts. Aplica-se a: env"""  # noqa: E501
@@ -363,15 +364,31 @@ class Workspace:
     def git(self) -> int:
         """Executa o comando git em todos os repositórios git. Aplica-se a: env"""
         git_arguments = " ".join(self.argv[2:]) if len(self.argv) > 2 else "status"
+        is_pull = self.argv[2:3] == ["pull"]
+        failures: list[tuple[Path, int]] = []
         for folder in [self.workspace_dir, *(Path(g.folder) for g in self.git_clones)]:
             if not folder.exists():
                 print(f"O projeto {folder} NÃO foi clonado ainda.")
                 continue
+            if is_pull and self._is_detached(folder):
+                print(f"{Color.y('Pulado:')} {Color.m(folder)} está com HEAD destacado (tag ou commit fixo).")
+                continue
             print(f"Executando {Color.b('git ' + git_arguments)} em {Color.m(folder)}")
             returncode = self._execute(f'git -C "{folder}" {git_arguments}')
             if returncode != 0:
-                return returncode
+                failures.append((folder, returncode))
+        if failures:
+            print(Color.r(f"\nFalhou em {len(failures)} repositório(s):"))
+            for folder, returncode in failures:
+                print(Color.r(f" - {folder} (código {returncode})"))
+            return failures[0][1]
         return 0
+
+    @staticmethod
+    def _is_detached(folder: Path) -> bool:
+        head = folder / ".git" / "HEAD"
+        # .git como arquivo (worktree/submódulo) não é inspecionado; o git decide
+        return head.is_file() and not head.read_text(encoding="utf-8").startswith("ref:")
 
     def cli(self) -> int:
         """Executa a CLI padrão do serviço, pode ser php -a, shell_plus, psql ou redis-cli. Bash por padrão. Usará exec se possível, caso contrário será run. Aplica-se a: $services_names$"""  # noqa: E501
