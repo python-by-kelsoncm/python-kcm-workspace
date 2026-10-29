@@ -126,6 +126,10 @@ class Workspace:
     @classmethod
     def main(cls) -> None:
         """Ponto de entrada: ``if __name__ == "__main__": MeuProjeto.main()``."""
+        # sem isto, a saída dos subprocessos aparece antes dos print quando stdout não é um terminal
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(line_buffering=True)
         sys.exit(cls().run())
 
     # ------------------------------------------------------------------ internos
@@ -177,7 +181,7 @@ class Workspace:
             scopes = scopes.replace("$restore_dirs$", ",".join(self._prefixed_envs("RESTORE_DIR_").keys()))
             scopes = scopes.replace("$download_files$", ",".join(self._prefixed_envs("DOWNLOAD_FILE").keys()))
             self._commands[name] = getattr(self, name)
-            self._scopes[name] = scopes.split(",")
+            self._scopes[name] = [scope for scope in scopes.split(",") if scope]
             self._descriptions[name] = match.group(1) + match.group(2)
 
     def _container_lines(self) -> list[str]:
@@ -278,7 +282,8 @@ class Workspace:
     {Color.m('--profile')} {Color.y('stringArray')}        Specify a profile to enable
     {Color.m('--project-directory')} {Color.y('string')}   Specify an alternate working directory (default: the path of the, first specified, Compose file)
     {Color.m('-p')}, {Color.m('--project-name')} {Color.y('string')}    Project name\nComandos:""")  # noqa: E501
-        for m in list(NATIVES.keys()) + list(self._commands.keys()):
+        natives = [m for m in NATIVES if m not in self._commands]
+        for m in natives + list(self._commands.keys()):
             fixed = Color.m(f"{m:22}")
             description = self._descriptions.get(m, NATIVES.get(m, " Sem descrição"))
             scopes = Color.c(", ".join(self._scopes.get(m, [" Ver `docker compose`"])))

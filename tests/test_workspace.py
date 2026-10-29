@@ -306,3 +306,39 @@ def test_main_exits_with_code(project, calls, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         Main.main()
     assert exc.value.code == 0
+
+
+def test_help_no_duplicates_and_empty_scope(project, monkeypatch, calls, capsys):
+    monkeypatch.setattr(ws_module, "COMPOSE_CONFIG", "", raising=False)
+    w = make(project)
+    w._read_compose = lambda: None
+    w.run()
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if "[95mexec" in line]
+    assert len(lines) == 1
+    assert ", env" not in out.replace(Color.ENDC, "").replace("[96m", "")
+
+
+def test_main_line_buffering(project, calls, monkeypatch):
+    seen = []
+
+    class Stream:
+        def reconfigure(self, **kwargs):
+            seen.append(kwargs)
+
+        def write(self, *a):
+            pass
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(ws_module.sys, "stdout", Stream())
+    monkeypatch.setattr(ws_module.sys, "stderr", Stream())
+
+    class Main(Workspace):
+        def __init__(self):
+            super().__init__(project, argv=["demo", "ps"])
+
+    with pytest.raises(SystemExit):
+        Main.main()
+    assert seen == [{"line_buffering": True}, {"line_buffering": True}]
