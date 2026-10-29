@@ -150,7 +150,15 @@ class Workspace:
                 raise ValueError(f"No arquivo .env está como {line}, mas devia ser {varname}={self.project_name}")
             os.environ[varname] = varval
 
+    @property
+    def _has_compose(self) -> bool:
+        names = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+        return any((self.workspace_dir / name).exists() for name in names)
+
     def _read_compose(self) -> None:
+        if not self._has_compose:
+            self._services, self._repositories = [], {""}
+            return
         result = subprocess.run(  # nosec B603 B607
             ["docker", "compose", "config"], capture_output=True, text=True, cwd=self.workspace_dir
         )
@@ -196,11 +204,11 @@ class Workspace:
         pattern = f".*{self.project_name}-{service_name}-1.*"
         return any(re.match(pattern, line) and "healthy" in line for line in self._container_lines())
 
-    def _execute(self, executable_file: str, *args: str) -> int:
+    def _execute(self, executable_file: str, *args: str, cwd: Path | None = None) -> int:
         command = " ".join([executable_file, *args])
         print(Color.g("Executando: "), Color.b(command))
         p = subprocess.Popen(  # nosec B602
-            command, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stdout, shell=True, cwd=self.workspace_dir
+            command, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stdout, shell=True, cwd=cwd or self.workspace_dir
         )
         return p.wait()
 
@@ -322,16 +330,20 @@ class Workspace:
         if not (folder / ".pre-commit-config.yaml").exists():
             return
         if shutil.which("pre-commit"):
-            print(f"Configurando pre-commit em {Color.c(folder)}")
-            self._execute(
-                f'pre-commit install --install-hooks -t pre-commit -t pre-push -c "{folder}/.pre-commit-config.yaml"'
-            )
+            pre_commit = "pre-commit"
+        elif shutil.which("uvx"):
+            pre_commit = "uvx pre-commit"
         else:
             print(f"{Color.y('Aviso:')} 'pre-commit' não está instalado. Pulando configuração em {Color.c(folder)}.")
+            return
+        print(f"Configurando pre-commit em {Color.c(folder)}")
+        # o hook é instalado no repositório da pasta de trabalho, por isso cwd=folder
+        self._execute(f"{pre_commit} install --install-hooks -t pre-commit -t pre-push", cwd=folder)
 
     def setup(self) -> int:
         """Executa o setup do ambiente, ou seja, clona todos os repositórios e configura o PATH e o hosts. Aplica-se a: env"""  # noqa: E501
-        self._execute(f"docker compose down {self._service_name}")
+        if self._has_compose:
+            self._execute(f"docker compose down {self._service_name}")
         self.clone()
         self._write_hosts()
         self._mk_volumes()

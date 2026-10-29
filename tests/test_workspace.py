@@ -42,6 +42,7 @@ def project(tmp_path: Path) -> Path:
     workspace.mkdir(parents=True)
     script = workspace / "demo"
     script.write_text("#!/usr/bin/env python3\n")
+    (workspace / "docker-compose.yml").write_text("services: {}\n")
     return script
 
 
@@ -53,6 +54,7 @@ def calls(monkeypatch):
         containers = {"value": ""}
 
     executed = Executed()
+    executed.cwds = []
     containers = executed.containers
 
     def fake_run(cmd, **kwargs):
@@ -65,6 +67,7 @@ def calls(monkeypatch):
     class FakePopen:
         def __init__(self, command, **kwargs):
             executed.append(command)
+            executed.cwds.append(kwargs.get("cwd"))
 
         def wait(self):
             return 0
@@ -342,3 +345,22 @@ def test_main_line_buffering(project, calls, monkeypatch):
     with pytest.raises(SystemExit):
         Main.main()
     assert seen == [{"line_buffering": True}, {"line_buffering": True}]
+
+
+def test_without_compose_skips_docker(project, calls, tmp_path):
+    (project.parent / "docker-compose.yml").unlink()
+    w = make(project, "setup")
+    w.home = tmp_path
+    assert w.run() == 0
+    assert not any(c.startswith("docker compose down") for c in calls)
+    assert w._services == []
+
+
+def test_pre_commit_via_uvx_in_repo_folder(project, calls, monkeypatch):
+    app = project.parent.parent / "app"
+    app.mkdir()
+    (app / ".pre-commit-config.yaml").write_text("repos: []\n")
+    monkeypatch.setattr(ws_module.shutil, "which", lambda name: "/bin/uvx" if name == "uvx" else None)
+    make(project, "clone", git_clones=[GitClone("app", "u")]).run()
+    assert calls[-1].startswith("uvx pre-commit install")
+    assert calls.cwds[-1] == app
