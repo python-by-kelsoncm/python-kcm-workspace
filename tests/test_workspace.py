@@ -228,11 +228,28 @@ def test_git(project, calls, tmp_path):
     assert calls[0].endswith("pull") and len(calls) == 2
 
 
-def test_git_stops_on_error(project, monkeypatch, calls):
+def test_git_continues_after_error(project, monkeypatch, calls, capsys):
     (project.parent.parent / "app").mkdir()
+    (project.parent.parent / "lib").mkdir()
     monkeypatch.setattr(Demo, "_execute", lambda self, *a: calls.append(" ".join(a)) or 1)
-    assert make(project, "git", "pull", git_clones=[GitClone("app", "u")]).run() == 1
-    assert len(calls) == 1
+    assert make(project, "git", "pull", git_clones=[GitClone("app", "u"), GitClone("lib", "u")]).run() == 1
+    assert len(calls) == 3
+    assert "Falhou em 3 repositório(s)" in capsys.readouterr().out
+
+
+def test_git_pull_skips_detached_head(project, calls, capsys):
+    tag = project.parent.parent / "tag"
+    (tag / ".git").mkdir(parents=True)
+    (tag / ".git" / "HEAD").write_text("0123456789abcdef\n")
+    branch = project.parent.parent / "branch"
+    (branch / ".git").mkdir(parents=True)
+    (branch / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    clones = [GitClone("tag", "u"), GitClone("branch", "u")]
+    assert make(project, "git", "pull", git_clones=clones).run() == 0
+    assert not any(str(tag) in c for c in calls) and any(str(branch) in c for c in calls)
+    assert "HEAD destacado" in capsys.readouterr().out
+    make(project, "git", "status", git_clones=clones).run()
+    assert any(str(tag) in c for c in calls)
 
 
 def test_clone_installs_pre_commit(project, calls, monkeypatch, capsys):
